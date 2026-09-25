@@ -31,12 +31,14 @@ export function login(req, res, next) {
     clearLoginAttempts(ip)
     const token = createSession()
 
+    const isProd = process.env.NODE_ENV === 'production'
+
     res.cookie('vf_admin', token, {
       httpOnly: true,
-      sameSite: 'lax',
+      sameSite: isProd ? 'none' : 'lax',
       path: '/',
       maxAge: SESSION_DURATION,
-      secure: process.env.NODE_ENV === 'production',
+      secure: isProd,
     })
 
     res.json({ authenticated: true })
@@ -57,11 +59,13 @@ export function logout(req, res) {
     destroySession(token)
   }
 
+  const isProd = process.env.NODE_ENV === 'production'
+
   res.clearCookie('vf_admin', {
     httpOnly: true,
-    sameSite: 'lax',
+    sameSite: isProd ? 'none' : 'lax',
     path: '/',
-    secure: process.env.NODE_ENV === 'production',
+    secure: isProd,
   })
 
   res.json({ authenticated: false })

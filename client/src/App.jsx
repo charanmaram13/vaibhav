@@ -39,6 +39,9 @@ function readProducts() {
   try { return JSON.parse(localStorage.getItem(STORE)) || sampleProducts } catch { return sampleProducts }
 }
 
+const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+const formatImage = img => (img?.startsWith('/api/') ? `${API_BASE}${img}` : img)
+
 function App() {
   const [items, setItems] = useState(readProducts)
   const [category, setCategory] = useState("Men's")
@@ -65,8 +68,12 @@ function App() {
   }, [])
 
   useEffect(() => {
-    fetch('/api/products').then(response => response.ok ? response.json() : Promise.reject()).then(products => {
-      if (Array.isArray(products)) { setItems(products); localStorage.setItem(STORE, JSON.stringify(products)) }
+    fetch(`${API_BASE}/api/products`).then(response => response.ok ? response.json() : Promise.reject()).then(products => {
+      if (Array.isArray(products)) {
+        const formatted = products.map(p => ({ ...p, image: formatImage(p.image) }))
+        setItems(formatted)
+        localStorage.setItem(STORE, JSON.stringify(formatted))
+      }
     }).catch(() => {})
   }, [])
 
@@ -82,9 +89,10 @@ function App() {
     const existing = items.find(item => item.id === editingId)
     const product = { ...(editingId ? existing : {}), ...draft, id: editingId, price: Number(draft.price), salePrice: draft.salePrice ? Number(draft.salePrice) : null, sizes: draft.sizes.length ? draft.sizes : ['One size'], badge: draft.isNewArrival ? 'NEW' : '', createdAt: existing?.createdAt || Date.now() }
     try {
-      const response = await fetch(editingId ? `/api/products/${encodeURIComponent(editingId)}` : '/api/products', { method: editingId ? 'PUT' : 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(product) })
+      const response = await fetch(editingId ? `${API_BASE}/api/products/${encodeURIComponent(editingId)}` : `${API_BASE}/api/products`, { method: editingId ? 'PUT' : 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(product) })
       const result = await readApiResponse(response)
-      saveItems(editingId ? items.map(item => item.id === editingId ? result : item) : [result, ...items])
+      const formatted = { ...result, image: formatImage(result.image) }
+      saveItems(editingId ? items.map(item => item.id === editingId ? formatted : item) : [formatted, ...items])
     } catch (error) { setNotice(error.message); window.setTimeout(() => setNotice(''), 3000); return }
     setEditingId(null)
     setDraft({ name: '', category: 'Men', price: '', salePrice: '', sizes: [], description: '', image: '', isNewArrival: true, isFeatured: false })
@@ -99,7 +107,7 @@ function App() {
   const deleteProduct = async product => {
     if (!window.confirm(`Delete “${product.name}” from the shop catalog?`)) return
     try {
-      const response = await fetch(`/api/products/${encodeURIComponent(product.id)}`, { method: 'DELETE', credentials: 'include' })
+      const response = await fetch(`${API_BASE}/api/products/${encodeURIComponent(product.id)}`, { method: 'DELETE', credentials: 'include' })
       await readApiResponse(response)
       saveItems(items.filter(item => item.id !== product.id))
     } catch (error) { setNotice(error.message); window.setTimeout(() => setNotice(''), 3000) }
@@ -108,7 +116,7 @@ function App() {
     setAdminOpen(true)
     try {
       setLoginError('')
-      const response = await fetch('/api/admin/session', { method: 'GET', credentials: 'include' })
+      const response = await fetch(`${API_BASE}/api/admin/session`, { method: 'GET', credentials: 'include' })
       const session = await readApiResponse(response)
       setAdminAuthenticated(Boolean(session.authenticated))
     } catch (error) { setAdminAuthenticated(false); setLoginError(error.message) }
@@ -118,7 +126,7 @@ function App() {
     setLoginBusy(true)
     setLoginError('')
     try {
-      const response = await fetch('/api/admin/login', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: loginUser, password: loginPassword }) })
+      const response = await fetch(`${API_BASE}/api/admin/login`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: loginUser, password: loginPassword }) })
       await readApiResponse(response)
       setAdminAuthenticated(true)
       setLoginPassword('')
@@ -127,7 +135,7 @@ function App() {
   }
   const signOut = async () => {
     try {
-      const response = await fetch('/api/admin/logout', { method: 'POST', credentials: 'include' })
+      const response = await fetch(`${API_BASE}/api/admin/logout`, { method: 'POST', credentials: 'include' })
       await readApiResponse(response, { allowEmpty: true })
     } catch (error) {
       setNotice(error.message)
