@@ -13,6 +13,7 @@ dist/
 */.env.*
 !.env.example
 !*/.env.example
+!client/.env.production
 
 # Caches and logs
 .npm-cache/
