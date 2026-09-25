@@ -40,23 +40,34 @@ export function clearLoginAttempts(ip) {
 
 export function verifyCredentials(submittedUsername, submittedPassword) {
   const username = process.env.ADMIN_USERNAME
+  const plainPassword = process.env.ADMIN_PASSWORD
   const passwordSalt = process.env.ADMIN_PASSWORD_SALT
   const passwordHash = process.env.ADMIN_PASSWORD_HASH
 
-  if (!username || !passwordSalt || !passwordHash) {
-    throw new Error('Admin credentials are not configured in environment variables.')
+  if (!username) {
+    throw new Error('Admin username is not configured in environment variables.')
   }
 
-  const userMatches = String(submittedUsername || '') === username
+  const userMatches = String(submittedUsername || '').trim().toLowerCase() === username.trim().toLowerCase()
+  if (!userMatches) return false
 
-  const candidateHash = scryptSync(String(submittedPassword || ''), passwordSalt, 64)
-  const expectedHash = Buffer.from(passwordHash, 'hex')
+  // Allow direct password match if ADMIN_PASSWORD is set in .env
+  if (plainPassword && String(submittedPassword || '') === plainPassword) {
+    return true
+  }
 
-  const passwordMatches =
-    expectedHash.length === candidateHash.length &&
-    timingSafeEqual(candidateHash, expectedHash)
+  // Fallback to scrypt hash match if salt & hash are provided
+  if (passwordSalt && passwordHash) {
+    try {
+      const candidateHash = scryptSync(String(submittedPassword || ''), passwordSalt, 64)
+      const expectedHash = Buffer.from(passwordHash, 'hex')
+      if (expectedHash.length === candidateHash.length && timingSafeEqual(candidateHash, expectedHash)) {
+        return true
+      }
+    } catch {}
+  }
 
-  return userMatches && passwordMatches
+  return false
 }
 
 export function createSession() {

@@ -41,7 +41,7 @@ export function login(req, res, next) {
       secure: isProd,
     })
 
-    res.json({ authenticated: true })
+    res.json({ authenticated: true, token })
   } catch (error) {
     next(error)
   }
@@ -50,7 +50,7 @@ export function login(req, res, next) {
 export function checkSession(req, res) {
   const token = extractSessionToken(req)
   const session = validateSession(token)
-  res.json({ authenticated: Boolean(session) })
+  res.json({ authenticated: Boolean(session), token: session ? token : null })
 }
 
 export function logout(req, res) {

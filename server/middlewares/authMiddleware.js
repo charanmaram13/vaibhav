@@ -1,6 +1,10 @@
 import { validateSession } from '../services/authService.js'
 
 export function extractSessionToken(req) {
+  const authHeader = req.headers.authorization
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    return authHeader.slice(7).trim()
+  }
   return req.cookies?.vf_admin || null
 }
 
@@ -15,3 +19,4 @@ export function requireAdmin(req, res, next) {
   req.adminSession = { token, ...session }
   next()
 }
+

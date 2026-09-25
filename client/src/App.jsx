@@ -6,7 +6,7 @@ import { banners } from './data/banners.js'
 import { products as sampleProducts } from './data/products.js'
 
 const STORE = 'vibhav-fashions-products'
-const categories = ["Men's", 'Kids']
+const categories = ['All', "Men's", 'Kids']
 
 async function readApiResponse(response, { allowEmpty = false } = {}) {
   const text = await response.text()
@@ -40,16 +40,32 @@ function readProducts() {
 }
 
 const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
-const formatImage = img => (img?.startsWith('/api/') ? `${API_BASE}${img}` : img)
+const DEFAULT_IMAGE =
+  'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=900&q=85'
+
+const formatImage = img => {
+  if (!img) return DEFAULT_IMAGE
+  if (img.startsWith('/api/')) return `${API_BASE}${img}`
+  return img
+}
+
+function normalizeCategoryName(cat) {
+  if (!cat) return 'Men'
+  const c = String(cat).trim().toLowerCase()
+  if (c.includes('kid')) return 'Kids'
+  if (c.includes('men')) return 'Men'
+  return cat
+}
 
 function App() {
   const [items, setItems] = useState(readProducts)
-  const [category, setCategory] = useState("Men's")
+  const [category, setCategory] = useState('All')
   const [search, setSearch] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [selected, setSelected] = useState(null)
   const [adminOpen, setAdminOpen] = useState(false)
   const [adminAuthenticated, setAdminAuthenticated] = useState(false)
+  const [adminToken, setAdminToken] = useState(() => localStorage.getItem('vf_admin_token') || '')
   const [loginUser, setLoginUser] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
   const [loginError, setLoginError] = useState('')
@@ -70,80 +86,188 @@ function App() {
   useEffect(() => {
     fetch(`${API_BASE}/api/products`).then(response => response.ok ? response.json() : Promise.reject()).then(products => {
       if (Array.isArray(products)) {
-        const formatted = products.map(p => ({ ...p, image: formatImage(p.image) }))
+        const formatted = products.map(p => ({
+          ...p,
+          category: normalizeCategoryName(p.category),
+          image: formatImage(p.image)
+        }))
         setItems(formatted)
         localStorage.setItem(STORE, JSON.stringify(formatted))
       }
     }).catch(() => {})
   }, [])
 
+  useEffect(() => {
+    if (adminToken) {
+      fetch(`${API_BASE}/api/admin/session`, {
+        method: 'GET',
+        credentials: 'include',
+        headers: { Authorization: `Bearer ${adminToken}` }
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data?.authenticated) {
+            setAdminAuthenticated(true)
+          } else {
+            setAdminAuthenticated(false)
+            setAdminToken('')
+            localStorage.removeItem('vf_admin_token')
+          }
+        })
+        .catch(() => {})
+    }
+  }, [adminToken])
+
   const visible = useMemo(() => items.filter(item => {
-    const categoryMatch = item.category === (category === "Men's" ? 'Men' : 'Kids')
-    return categoryMatch && item.name.toLowerCase().includes(search.toLowerCase())
+    const normCat = normalizeCategoryName(item.category)
+    let categoryMatch = true
+    if (category === "Men's") {
+      categoryMatch = normCat === 'Men'
+    } else if (category === 'Kids') {
+      categoryMatch = normCat === 'Kids'
+    }
+    return categoryMatch && (item.name || '').toLowerCase().includes(search.toLowerCase())
   }).sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0)), [items, category, search])
+
   const saveItems = next => { setItems(next); localStorage.setItem(STORE, JSON.stringify(next)) }
   const openProduct = product => setSelected(product)
+
   const saveProduct = async event => {
     event.preventDefault()
-    if (!draft.name.trim() || !draft.price || !draft.image) return
+    if (!draft.name.trim() || !draft.price || !draft.image) {
+      setNotice('Product name, price, and image are required.')
+      window.setTimeout(() => setNotice(''), 3000)
+      return
+    }
     const existing = items.find(item => item.id === editingId)
-    const product = { ...(editingId ? existing : {}), ...draft, id: editingId, price: Number(draft.price), salePrice: draft.salePrice ? Number(draft.salePrice) : null, sizes: draft.sizes.length ? draft.sizes : ['One size'], badge: draft.isNewArrival ? 'NEW' : '', createdAt: existing?.createdAt || Date.now() }
+    const product = {
+      ...(editingId ? existing : {}),
+      ...draft,
+      id: editingId,
+      category: normalizeCategoryName(draft.category),
+      price: Number(draft.price),
+      salePrice: draft.salePrice ? Number(draft.salePrice) : null,
+      sizes: draft.sizes.length ? draft.sizes : ['One size'],
+      badge: draft.isNewArrival ? 'NEW' : '',
+      createdAt: existing?.createdAt || Date.now()
+    }
     try {
-      const response = await fetch(editingId ? `${API_BASE}/api/products/${encodeURIComponent(editingId)}` : `${API_BASE}/api/products`, { method: editingId ? 'PUT' : 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(product) })
+      const headers = { 'Content-Type': 'application/json' }
+      if (adminToken) headers['Authorization'] = `Bearer ${adminToken}`
+
+      const response = await fetch(
+        editingId ? `${API_BASE}/api/products/${encodeURIComponent(editingId)}` : `${API_BASE}/api/products`,
+        {
+          method: editingId ? 'PUT' : 'POST',
+          credentials: 'include',
+          headers,
+          body: JSON.stringify(product)
+        }
+      )
       const result = await readApiResponse(response)
-      const formatted = { ...result, image: formatImage(result.image) }
+      const formatted = {
+        ...result,
+        category: normalizeCategoryName(result.category),
+        image: formatImage(result.image)
+      }
       saveItems(editingId ? items.map(item => item.id === editingId ? formatted : item) : [formatted, ...items])
-    } catch (error) { setNotice(error.message); window.setTimeout(() => setNotice(''), 3000); return }
+    } catch (error) { setNotice(error.message); window.setTimeout(() => setNotice(''), 3500); return }
     setEditingId(null)
     setDraft({ name: '', category: 'Men', price: '', salePrice: '', sizes: [], description: '', image: '', isNewArrival: true, isFeatured: false })
     setNotice(editingId ? 'Product updated.' : 'Product added.')
     window.setTimeout(() => setNotice(''), 2500)
   }
+
   const editProduct = product => {
     setEditingId(product.id)
-    setDraft({ name: product.name || '', category: product.category || 'Men', price: String(product.price || ''), salePrice: product.salePrice ? String(product.salePrice) : '', sizes: product.sizes || [], description: product.description || '', image: product.image || '', isNewArrival: Boolean(product.isNewArrival ?? product.badge), isFeatured: Boolean(product.isFeatured) })
+    setDraft({
+      name: product.name || '',
+      category: normalizeCategoryName(product.category) || 'Men',
+      price: String(product.price || ''),
+      salePrice: product.salePrice ? String(product.salePrice) : '',
+      sizes: product.sizes || [],
+      description: product.description || '',
+      image: product.image || '',
+      isNewArrival: Boolean(product.isNewArrival ?? product.badge),
+      isFeatured: Boolean(product.isFeatured)
+    })
     document.querySelector('.admin-panel')?.scrollTo({ top: 0, behavior: 'smooth' })
   }
+
   const deleteProduct = async product => {
     if (!window.confirm(`Delete “${product.name}” from the shop catalog?`)) return
     try {
-      const response = await fetch(`${API_BASE}/api/products/${encodeURIComponent(product.id)}`, { method: 'DELETE', credentials: 'include' })
+      const headers = {}
+      if (adminToken) headers['Authorization'] = `Bearer ${adminToken}`
+
+      const response = await fetch(`${API_BASE}/api/products/${encodeURIComponent(product.id)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers
+      })
       await readApiResponse(response)
       saveItems(items.filter(item => item.id !== product.id))
+      setNotice('Product deleted.')
+      window.setTimeout(() => setNotice(''), 2500)
+      if (editingId === product.id) {
+        cancelEdit()
+      }
     } catch (error) { setNotice(error.message); window.setTimeout(() => setNotice(''), 3000) }
   }
+
   const openAdmin = async () => {
     setAdminOpen(true)
     try {
       setLoginError('')
-      const response = await fetch(`${API_BASE}/api/admin/session`, { method: 'GET', credentials: 'include' })
+      const headers = {}
+      if (adminToken) headers['Authorization'] = `Bearer ${adminToken}`
+      const response = await fetch(`${API_BASE}/api/admin/session`, { method: 'GET', credentials: 'include', headers })
       const session = await readApiResponse(response)
       setAdminAuthenticated(Boolean(session.authenticated))
-    } catch (error) { setAdminAuthenticated(false); setLoginError(error.message) }
+    } catch (error) {
+      setAdminAuthenticated(false)
+      setLoginError(error.message)
+    }
   }
+
   const signIn = async event => {
     event.preventDefault()
     setLoginBusy(true)
     setLoginError('')
     try {
-      const response = await fetch(`${API_BASE}/api/admin/login`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: loginUser, password: loginPassword }) })
-      await readApiResponse(response)
+      const response = await fetch(`${API_BASE}/api/admin/login`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: loginUser.trim(), password: loginPassword })
+      })
+      const data = await readApiResponse(response)
+      if (data?.token) {
+        setAdminToken(data.token)
+        localStorage.setItem('vf_admin_token', data.token)
+      }
       setAdminAuthenticated(true)
       setLoginPassword('')
     } catch (error) { setLoginError(error.message) }
     finally { setLoginBusy(false) }
   }
+
   const signOut = async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/admin/logout`, { method: 'POST', credentials: 'include' })
+      const headers = {}
+      if (adminToken) headers['Authorization'] = `Bearer ${adminToken}`
+      const response = await fetch(`${API_BASE}/api/admin/logout`, { method: 'POST', credentials: 'include', headers })
       await readApiResponse(response, { allowEmpty: true })
     } catch (error) {
       setNotice(error.message)
       window.setTimeout(() => setNotice(''), 3000)
     }
+    setAdminToken('')
+    localStorage.removeItem('vf_admin_token')
     setAdminAuthenticated(false)
     setEditingId(null)
   }
+
   const cancelEdit = () => {
     setEditingId(null)
     setDraft({ name: '', category: 'Men', price: '', salePrice: '', sizes: [], description: '', image: '', isNewArrival: true, isFeatured: false })
@@ -209,25 +333,26 @@ function App() {
           <div className="product-grid" key={category + search}>
             {visible.map(product => <ProductCard key={product.id} product={product} onSelect={openProduct}/>) }
           </div>
-          {visible.length === 0 && <div className="empty-state"><p>{search ? `No styles match “${search}”.` : category === "Men's" ? "New men's arrivals coming soon." : "New kids' arrivals coming soon."}</p>{search && <button onClick={() => setSearch('')}>Clear search</button>}</div>}
+          {visible.length === 0 && <div className="empty-state"><p>{search ? `No styles match “${search}”.` : category === 'All' ? 'No products available.' : category === "Men's" ? "New men's arrivals coming soon." : "New kids' arrivals coming soon."}</p>{search && <button onClick={() => setSearch('')}>Clear search</button>}</div>}
         </section>
       </main>
 
       <section className="instagram-section"><div className="instagram-copy"><Instagram/><span>FROM OUR INSTAGRAM</span><h2>Follow Sri Vaibhav Fashions</h2><a href="https://www.instagram.com/sri_vaibhav_fashions_/" target="_blank" rel="noreferrer">@sri_vaibhav_fashions_ <ArrowRight size={15}/></a></div><p className="instagram-note">See our latest designs and arrivals on Instagram.<br/>A live feed can be connected here when available.</p></section>
       <section className="store-section"><div><span>VISIT OUR STORE</span><h2>Sri Vaibhav Fashions<br/><em>Addanki</em></h2></div><div className="store-actions"><a href="https://maps.google.com/?q=Sri+Vaibhav+Fashions+Addanki" target="_blank" rel="noreferrer">GET DIRECTIONS <ArrowRight size={16}/></a><a href="https://wa.me/" target="_blank" rel="noreferrer">WHATSAPP <MessageCircle size={16}/></a></div></section>
-      <footer className="site-footer"><a className="footer-brand" href="#top">SRI VAIBHAV FASHIONS <small>ADDANKI</small></a><div><button onClick={() => {selectCategory("Men's");document.querySelector('#new-arrivals')?.scrollIntoView({behavior:'smooth'})}}>MEN'S</button><button onClick={() => {selectCategory('Kids');document.querySelector('#new-arrivals')?.scrollIntoView({behavior:'smooth'})}}>KIDS</button></div><div><a href="https://www.instagram.com/sri_vaibhav_fashions_/" target="_blank" rel="noreferrer">INSTAGRAM</a><a href="https://wa.me/" target="_blank" rel="noreferrer">WHATSAPP</a></div><a href="https://maps.google.com/?q=Sri+Vaibhav+Fashions+Addanki" target="_blank" rel="noreferrer">ADDANKI · LOCATION</a></footer>
+      <footer className="site-footer"><a className="footer-brand" href="#top">SRI VAIBHAV FASHIONS <small>ADDANKI</small></a><div><button onClick={() => {selectCategory('All');document.querySelector('#new-arrivals')?.scrollIntoView({behavior:'smooth'})}}>ALL</button><button onClick={() => {selectCategory("Men's");document.querySelector('#new-arrivals')?.scrollIntoView({behavior:'smooth'})}}>MEN'S</button><button onClick={() => {selectCategory('Kids');document.querySelector('#new-arrivals')?.scrollIntoView({behavior:'smooth'})}}>KIDS</button></div><div><a href="https://www.instagram.com/sri_vaibhav_fashions_/" target="_blank" rel="noreferrer">INSTAGRAM</a><a href="https://wa.me/" target="_blank" rel="noreferrer">WHATSAPP</a></div><a href="https://maps.google.com/?q=Sri+Vaibhav+Fashions+Addanki" target="_blank" rel="noreferrer">ADDANKI · LOCATION</a></footer>
 
       <ProductModal product={selected} onClose={() => setSelected(null)}/>
       {notice && <div className="toast"><Check size={15}/>{notice}</div>}
 
       {adminOpen && <div className="admin-backdrop" onClick={() => setAdminOpen(false)}><section className="admin-panel" onClick={event => event.stopPropagation()}>
         <div className="admin-top"><button onClick={() => setAdminOpen(false)} className="admin-back"><ArrowLeft size={17}/> SHOP</button>{adminAuthenticated ? <button onClick={signOut} className="admin-label"><LogOut size={14}/> SIGN OUT</button> : <span className="admin-label"><LockKeyhole size={14}/> ADMIN SIGN IN</span>}</div>
-        {!adminAuthenticated ? <><div className="admin-heading"><span className="section-kicker">SRI VAIBHAV FASHIONS · ADDANKI</span><h2>Admin sign in</h2><p>Sign in to manage products and prices.</p></div><form className="product-form login-form" onSubmit={signIn}><label className="form-label">Username<input autoComplete="username" required value={loginUser} onChange={event => setLoginUser(event.target.value)} placeholder="Username"/></label><label className="form-label">Password<input autoComplete="current-password" type="password" required value={loginPassword} onChange={event => setLoginPassword(event.target.value)} placeholder="Password"/></label>{loginError && <p className="login-error" role="alert">{loginError}</p>}<button className="primary-button submit-product" type="submit" disabled={loginBusy}>{loginBusy ? 'SIGNING IN…' : 'SIGN IN'}</button><div className="admin-footnote"><ShieldCheck size={14}/><span>Product changes are restricted to signed-in administrators.</span></div></form></> : <>
+        {!adminAuthenticated ? <><div className="admin-heading"><span className="section-kicker">SRI VAIBHAV FASHIONS · ADDANKI</span><h2>Admin sign in</h2><p>Sign in to manage products and prices.</p></div><form className="product-form login-form" onSubmit={signIn}><label className="form-label">Username<input autoComplete="username" required value={loginUser} onChange={event => setLoginUser(event.target.value)} placeholder="vaibhavFashions"/></label><label className="form-label">Password<input autoComplete="current-password" type="password" required value={loginPassword} onChange={event => setLoginPassword(event.target.value)} placeholder="Password"/></label>{loginError && <p className="login-error" role="alert">{loginError}</p>}<button className="primary-button submit-product" type="submit" disabled={loginBusy}>{loginBusy ? 'SIGNING IN…' : 'SIGN IN'}</button><div className="admin-footnote"><ShieldCheck size={14}/><span>Product changes are restricted to signed-in administrators.</span></div></form></> : <>
         <div className="admin-heading"><span className="section-kicker">SRI VAIBHAV FASHIONS · ADDANKI</span><h2>{editingId ? 'Edit product' : 'Add a product'}</h2><p>Add a style to the customer catalog.</p></div>
         <form className="product-form" onSubmit={saveProduct}>
-          <div className="form-photo-row"><button className={draft.image ? 'photo-upload has-photo' : 'photo-upload'} type="button" onClick={() => fileInput.current?.click()}>{draft.image ? <img src={draft.image} alt="Product preview"/> : <><Upload size={19}/><span>ADD PHOTO</span></>}</button><input ref={fileInput} type="file" accept="image/*" hidden onChange={uploadPhoto}/><div className="photo-help"><b>Product image</b><span>Clear, well-lit photos work best.</span></div></div>
+          <div className="form-photo-row"><button className={draft.image ? 'photo-upload has-photo' : 'photo-upload'} type="button" onClick={() => fileInput.current?.click()}>{draft.image ? <img src={draft.image} alt="Product preview" onError={e => { e.currentTarget.src = DEFAULT_IMAGE }}/> : <><Upload size={19}/><span>ADD PHOTO</span></>}</button><input ref={fileInput} type="file" accept="image/*" hidden onChange={uploadPhoto}/><div className="photo-help"><b>Product image</b><span>Upload from device or enter an image URL below.</span></div></div>
+          <label className="form-label">Or Image URL<input type="url" value={draft.image?.startsWith('data:') ? '' : draft.image} onChange={event => setDraft({...draft,image:event.target.value})} placeholder="https://... or choose photo above"/></label>
           <label className="form-label">Product name<input required value={draft.name} onChange={event => setDraft({...draft,name:event.target.value})} placeholder="e.g. Cotton shirt"/></label>
-          <div className="form-two-col"><label className="form-label">Category<select value={draft.category} onChange={event => setDraft({...draft,category:event.target.value})}><option>Men</option><option>Kids</option></select></label><label className="form-label">Price (₹)<input required min="1" type="number" value={draft.price} onChange={event => setDraft({...draft,price:event.target.value})} placeholder="899"/></label></div>
+          <div className="form-two-col"><label className="form-label">Category<select value={draft.category} onChange={event => setDraft({...draft,category:event.target.value})}><option value="Men">Men</option><option value="Kids">Kids</option></select></label><label className="form-label">Price (₹)<input required min="1" type="number" value={draft.price} onChange={event => setDraft({...draft,price:event.target.value})} placeholder="899"/></label></div>
           <label className="form-label">Sale price (optional)<input min="1" type="number" value={draft.salePrice} onChange={event => setDraft({...draft,salePrice:event.target.value})} placeholder="e.g. 799"/></label>
           <fieldset className="sizes-field"><legend>Available sizes</legend><div>{['S','M','L','XL','XXL','2–3Y','4–5Y','6–7Y','8–9Y'].map(size => <button key={size} type="button" onClick={() => toggleSize(size)} className={draft.sizes.includes(size) ? 'size-chip chosen' : 'size-chip'}>{size}</button>)}</div></fieldset>
           <label className="form-label">Description<textarea rows="3" value={draft.description} onChange={event => setDraft({...draft,description:event.target.value})} placeholder="Optional product details"/></label>
@@ -235,7 +360,7 @@ function App() {
           <button className="primary-button submit-product" type="submit">{editingId ? 'Save changes' : <><Plus size={16}/> Add product</>}</button>
           {editingId && <button className="cancel-edit" type="button" onClick={cancelEdit}>CANCEL EDIT</button>}
         </form>
-        <section className="admin-products"><h3>Manage products <span>{items.length}</span></h3>{items.map(product => <div className="admin-product-row" key={product.id}><img src={product.image} alt=""/><div><strong>{product.name}</strong><small>{product.category} · ₹{Number(product.salePrice || product.price).toLocaleString('en-IN')}</small></div><button onClick={() => editProduct(product)}>EDIT</button><button className="delete-product" onClick={() => deleteProduct(product)}>DELETE</button></div>)}</section>
+        <section className="admin-products"><h3>Manage products <span>{items.length}</span></h3>{items.map(product => <div className="admin-product-row" key={product.id}><img src={product.image || DEFAULT_IMAGE} alt="" onError={e => { e.currentTarget.src = DEFAULT_IMAGE }}/><div><strong>{product.name}</strong><small>{product.category} · ₹{Number(product.salePrice || product.price).toLocaleString('en-IN')}</small></div><button onClick={() => editProduct(product)}>EDIT</button><button className="delete-product" onClick={() => deleteProduct(product)}>DELETE</button></div>)}</section>
         <div className="admin-footnote"><ShieldCheck size={14}/><span>Product changes are saved on this server and shared by visitors using this site.</span></div>
         </>}
       </section></div>}

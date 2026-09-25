@@ -21,14 +21,15 @@ export async function storeProductImage(image) {
     return image
   }
 
-  const match = image.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+=*)$/)
+  const match = image.match(/^data:(image\/(?:jpeg|jpg|png|webp|gif));base64,\s*([A-Za-z0-9+/=\s]+)$/i)
   if (!match) {
     throw new Error('Choose a JPEG, PNG, or WebP product photo.')
   }
 
-  const buffer = Buffer.from(match[2], 'base64')
-  if (buffer.length > 3 * 1024 * 1024) {
-    throw new Error('Product photos must be 3 MB or smaller after compression.')
+  const cleanBase64 = match[2].replace(/\s+/g, '')
+  const buffer = Buffer.from(cleanBase64, 'base64')
+  if (buffer.length > 5 * 1024 * 1024) {
+    throw new Error('Product photos must be 5 MB or smaller.')
   }
 
   const bucket = getGridFSBucket()

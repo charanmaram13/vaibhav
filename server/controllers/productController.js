@@ -4,10 +4,29 @@ import Product from '../models/Product.js'
 import { deleteStoredImage, storeProductImage } from '../services/imageService.js'
 import { products as starterProducts } from '../data/products.js'
 
+function normalizeCategory(cat) {
+  if (!cat) return 'Men'
+  const c = String(cat).trim()
+  if (/kid/i.test(c)) return 'Kids'
+  if (/men/i.test(c)) return 'Men'
+  return c
+}
+
+function extractImageId(url) {
+  if (!url || typeof url !== 'string') return null
+  const match = url.match(/\/api\/images\/([a-f\d]{24})/i)
+  return match ? match[1] : null
+}
+
+const DEFAULT_FALLBACK_IMAGE =
+  'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=900&q=85'
+
 function buildIdQuery(id) {
-  const conditions = [{ id }]
-  if (mongoose.Types.ObjectId.isValid(id)) {
-    conditions.push({ _id: new mongoose.Types.ObjectId(id) })
+  if (!id) return { _id: null }
+  const cleanId = String(id).trim()
+  const conditions = [{ id: cleanId }]
+  if (mongoose.Types.ObjectId.isValid(cleanId)) {
+    conditions.push({ _id: new mongoose.Types.ObjectId(cleanId) })
   }
   return { $or: conditions }
 }
@@ -20,11 +39,16 @@ export async function getProducts(_req, res, next) {
       products = await Product.find().sort({ createdAt: -1 }).lean()
     }
 
-    // Ensure every product has a valid id property
+    // Ensure every product has a valid id property, normalized category, and fallback image
     const formatted = products.map(p => {
       const id = p.id || (p._id ? p._id.toString() : `product-${randomBytes(6).toString('hex')}`)
       const { _id, __v, ...rest } = p
-      return { ...rest, id }
+      return {
+        ...rest,
+        id,
+        category: normalizeCategory(p.category),
+        image: p.image || p.images?.[0] || DEFAULT_FALLBACK_IMAGE,
+      }
     })
 
     res.json(formatted)
@@ -52,6 +76,7 @@ export async function createProduct(req, res, next) {
       ...payload,
       id: productId,
       name: payload.name.trim(),
+      category: normalizeCategory(payload.category),
       price,
       image: storedImageUrl,
       createdAt: payload.createdAt || Date.now(),
@@ -84,9 +109,27 @@ export async function updateProduct(req, res, next) {
     }
 
     let storedImageUrl = existing.image
-    if (incoming.image !== existing.image) {
-      storedImageUrl = await storeProductImage(incoming.image)
-      await deleteStoredImage(existing.image)
+    const incomingImage = String(incoming.image).trim()
+    const incomingGridFsId = extractImageId(incomingImage)
+    const existingGridFsId = extractImageId(existing.image)
+
+    // Check if a new base64 image was uploaded
+    if (incomingImage.startsWith('data:image/')) {
+      storedImageUrl = await storeProductImage(incomingImage)
+      if (existing.image) {
+        await deleteStoredImage(existing.image)
+      }
+    } else if (incomingGridFsId && existingGridFsId && incomingGridFsId === existingGridFsId) {
+      // Same GridFS image, retain the clean internal relative path
+      storedImageUrl = existing.image.startsWith('/api/')
+        ? existing.image
+        : `/api/images/${existingGridFsId}`
+    } else if (incomingImage !== existing.image) {
+      // Changed to a different URL
+      storedImageUrl = incomingImage
+      if (existingGridFsId) {
+        await deleteStoredImage(existing.image)
+      }
     }
 
     const updated = await Product.findOneAndUpdate(
@@ -95,10 +138,11 @@ export async function updateProduct(req, res, next) {
         ...incoming,
         id: existing.id || id,
         name: incoming.name.trim(),
+        category: normalizeCategory(incoming.category),
         price,
         image: storedImageUrl,
       },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     ).select('-_id -__v').lean()
 
     res.json(updated)
@@ -118,10 +162,13 @@ export async function deleteProduct(req, res, next) {
     }
 
     await Product.deleteOne(query)
-    await deleteStoredImage(existing.image)
+    if (existing.image) {
+      await deleteStoredImage(existing.image)
+    }
 
     res.json({ deleted: true })
   } catch (error) {
     next(error)
   }
 }
+
